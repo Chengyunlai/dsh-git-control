@@ -6,9 +6,9 @@
  * Connection's browser-trust fence). Git is pure read-only: status, per-file
  * diffs, history, and one-commit details. No git write operations are exposed
  * at all. The single chat bridge route (`/api/git.review`) posts a review
- * suggestion into the user's own active conversation through the same
+ * suggestion into a fresh workspace conversation through the same
  * `sessionController.prompt` RPC the chat input itself uses — it never touches
- * git and only ever targets the session the browser panel passes in.
+ * git and returns the newly created session id.
  */
 
 /** Git selectors inherited from the environment are cleared so a command runs against `cwd` only. */
@@ -99,7 +99,7 @@ async function requireWorkspacePath(ctx, cwd, signal) {
     throw Object.assign(new Error('missing workspace path'), { status: 400 });
   }
   for (const workspace of await ctx.workspaceRegistry.list()) {
-    if (workspace.path === cwd) return cwd;
+    if (workspace.path === cwd) return workspace;
   }
   throw Object.assign(new Error('path is not a registered workspace'), { status: 403 });
 }
@@ -386,32 +386,41 @@ function requireSessionId(value) {
 
 /** The review-suggestion body; bounded so one message stays sane. */
 function requireReviewText(value) {
-  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_REVIEW_TEXT) {
+  if (typeof value !== 'string' || value.trim().length === 0 || value.length > MAX_REVIEW_TEXT) {
     throw Object.assign(new Error('invalid review text'), { status: 400 });
   }
   return value;
 }
 
 /**
- * Bridge one review suggestion into the user's own conversation. This is the
- * same `sessionController.prompt` RPC the chat input uses: `mode: 'queue'`
- * admits the message (or queues it while the agent is running). Git is never
- * touched; the target session is exactly the one the panel passes in.
+ * Bridge one review suggestion into a NEW project conversation. A fresh
+ * Session is created bound to the workspace the panel is showing (so the
+ * review never pollutes the user's existing chat), then the message is
+ * admitted through the same `sessionController.prompt` RPC the chat input
+ * uses (`mode: 'queue'` queues while the agent is running). Git is never
+ * touched; the created Session is returned so the panel can open it.
  */
 async function handleReview(ctx, request, signal) {
   const payload = await request.json();
   const cwd = typeof payload?.cwd === 'string' ? payload.cwd : '';
-  const sessionId = requireSessionId(payload?.sessionId ?? '');
   const text = requireReviewText(payload?.text ?? '');
-  await requireWorkspacePath(ctx, cwd, signal);
-  const result = await ctx.sessionController.prompt({
-    requestId: crypto.randomUUID(),
-    sessionId,
-    mode: 'queue',
-    content: [{ type: 'text', text }],
-    clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  }, signal);
-  return json({ ok: result?.accepted === true });
+  const workspace = await requireWorkspacePath(ctx, cwd, signal);
+  signal.throwIfAborted();
+  const created = await ctx.sessionController.create({ workspaceId: workspace.id, sessionId: `session-${crypto.randomUUID()}` });
+  const sessionId = requireSessionId(created?.sessionId ?? '');
+  try {
+    const result = await ctx.sessionController.prompt({
+      requestId: crypto.randomUUID(),
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text }],
+      clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    }, signal);
+    return json({ ok: result.accepted === true, sessionId, created: true });
+  } catch (error) {
+    // Creation is durable even if prompt admission fails or its outcome is unknown.
+    return json({ ok: false, sessionId, created: true, phase: 'prompt' });
+  }
 }
 
 /** Register the read-only git routes plus the chat bridge inside Connection's authentication fence. */

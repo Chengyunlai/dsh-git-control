@@ -27,7 +27,7 @@ A Harness plugin styled after the **IntelliJ IDEA Git tool window** (Darcula pal
 | 🌿 **Commit graph + details** | Multi-color lanes, smooth Bézier merge lines, branch labels; click any commit for author / date / parents / file list / full diff |
 | 🐘 **Large-repo friendly** | Change list truncates at 500 entries with a total hint, plus a file filter box |
 | 🌐 **Bilingual** | UI copy follows the Harness language (Chinese / English) |
-| 💬 **One-click "suggest to AI"** | While reviewing, type a suggestion right in the panel and send it to the current conversation — no window switching; the agent picks it up immediately |
+| 💬 **One-click "suggest to AI"** | While reviewing, type a suggestion right in the panel and send it to a new project conversation — no window switching; the agent picks it up immediately |
 
 ## 📸 Screenshots
 
@@ -35,7 +35,7 @@ A Harness plugin styled after the **IntelliJ IDEA Git tool window** (Darcula pal
 
 ![Changes](screenshots/changes.png)
 
-**Suggest to AI** — write a review suggestion in the panel and send it to the current conversation (no switching; the diff is attached as context):
+**Suggest to AI** — write a review suggestion in the panel and send it to a new project conversation (path only by default; selected diff lines are optional):
 
 ![Review](screenshots/review.png)
 
@@ -61,7 +61,7 @@ dsh --profile <profile-name> plugin install /path/to/dsh-git-control
 2. The panel **auto-binds to the current project**; use the toolbar repository dropdown to inspect other registered workspaces
 3. **Changes tab**: the filter box at the top filters by path; click any file to view its diff on the right
 4. **Log tab**: click any commit row to expand its details below (file list + full diff)
-5. **Suggest to AI**: click the button in a diff or commit detail, type your review comment and send — the message lands in the **current conversation** with the diff attached as context, and the agent starts immediately; you never leave the panel (it uses the same `sessionController.prompt` channel as the chat input, `mode: 'queue'` so it queues while the agent is busy)
+5. **Suggest to AI**: use the toolbar without opening a file or an existing chat, or open the composer from a diff or commit. Only your suggestion and relative path (or commit hash) are included by default. Click diff lines to attach selected code. Every send creates and opens a new project conversation.
 
 ## 🏗 Architecture
 
@@ -70,7 +70,7 @@ dsh --profile <profile-name> plugin install /path/to/dsh-git-control
   - `/api/git.diff` — single-file diff (staged / worktree / combined / untracked)
   - `/api/git.log` — commit history (with parents, for the commit graph)
   - `/api/git.commit` — per-commit metadata + file stats + full diff
-  - `/api/git.review` — delivers a review suggestion to the current session (the same `ctx.sessionController.prompt` the chat input uses, `mode: 'queue'`; never touches git)
+  - `/api/git.review` — creates a workspace conversation and delivers the review suggestion (the same `ctx.sessionController.prompt` the chat input uses, `mode: 'queue'`; never touches git)
   - Safety: `cwd` must be a registered workspace path; file paths reject absolute paths / `..` / leading `-`; commit hashes accept hex only; session ids and message length are bounded
 - **Client** (`client.js`): plain JavaScript, no build step, registered through the `sidebar.panellist` + `main` keyed slots; Darcula palette (`#2B2D30` / `#3C3F41` / `#1B5A33` / `#6A2A24`…); copy goes through the Harness locale service (zh / en)
 
@@ -78,7 +78,8 @@ dsh --profile <profile-name> plugin install /path/to/dsh-git-control
 
 - Tested in the **DeepSeek Harness desktop app (0.2.1-rc.3)** Web GUI: panel registration, auto-follow of the current project, the three change groups, diffs, commit graph and commit details all work
 - Read-only check: `POST /api/git.ops` returns 404 — the Host exposes no git write routes
-- "Suggest to AI" verified live: a review message was delivered to the current session via `sessionController.prompt` (`{ok: true}`) and the agent responded
+- `node --test test/*.test.mjs`: distinct workspace sessions, input validation, recovery after rejected admission, and opening a new chat without selecting a file.
+- When admission is uncertain, inspect the created conversation before retrying.
 - Screenshots are real captures of the rendered panel (demo content)
 
 ## 🎁 Icons & License

@@ -28,7 +28,7 @@
 | 🌿 **提交图 + 提交详情** | 多色泳道、贝塞尔平滑合并线、分支标签；点开任意提交：作者 / 时间 / 父提交 / 文件列表 / 完整 diff |
 | 🐘 **大仓库友好** | 变更列表自动截断（前 500 条并提示总数）+ 文件过滤框 |
 | 🌐 **中英双语** | 界面文案跟随 Harness 语言（中文 / English） |
-| 💬 **一键向 AI 提建议** | review 时不用切窗口：在 diff 或提交详情里直接写评审建议，一键投递到当前对话，agent 即刻响应 |
+| 💬 **一键向 AI 提建议** | review 时不用切窗口：在 diff 或提交详情里直接写评审建议，一键创建项目新对话；默认只带路径，可选择附加代码 |
 
 ## 📸 截图
 
@@ -36,7 +36,7 @@
 
 ![Changes](screenshots/changes.png)
 
-**向 AI 提建议**——review 时在面板内直接写建议，一键发送到当前对话（无需切换窗口；附带上当前 diff 作为上下文）：
+**向 AI 提建议**——review 时在面板内直接写建议，发送到项目新对话（默认只带路径，可选择附加代码）：
 
 ![Review](screenshots/review.png)
 
@@ -62,7 +62,7 @@ dsh --profile <profile名> plugin install /path/to/dsh-git-control
 2. 面板**自动绑定当前项目**；点击工具栏仓库下拉可切换查看其他已注册工作区
 3. **Changes 标签**：顶部输入框可按路径过滤；点击任意文件即可在右侧查看 diff
 4. **Log 标签**：点击任意提交行，底部展开该提交的详情（文件列表 + 完整 diff）
-5. **向 AI 提建议**：在 diff 或提交详情的右上角点击「向 AI 提建议」，写下评审意见并发送——消息会带着当前 diff 上下文投递到**正在使用的对话**，agent 立即开始处理，无需离开面板（发送走的是与聊天输入框完全相同的 `sessionController.prompt` 通道，`mode: 'queue'` 会在 agent 忙碌时排队）
+5. **向 AI 提建议**：工具栏可直接发项目建议，无需先打开文件或已有对话；diff 与提交详情也提供入口。默认只发送建议与相对路径（提交评审使用哈希），点击需要的 diff 行后才附加代码。每次发送创建并打开项目新对话；删除旧对话不影响使用。
 
 ## 🏗 架构
 
@@ -71,7 +71,7 @@ dsh --profile <profile名> plugin install /path/to/dsh-git-control
   - `/api/git.diff` — 单文件 diff（暂存 / 工作区 / 合并 / 未跟踪）
   - `/api/git.log` — 提交历史（含 parents，供提交图使用）
   - `/api/git.commit` — 单提交元数据 + 文件统计 + 完整 diff
-  - `/api/git.review` — 把评审建议投递到当前会话（调用与聊天输入框相同的 `ctx.sessionController.prompt`，`mode: 'queue'`；不触碰 git）
+  - `/api/git.review` — 创建独立的工作区会话并投递建议，返回新会话 id；不触碰 git
   - 安全约束：`cwd` 只能是已注册 workspace 的路径；文件路径拒绝绝对路径 / `..` / `-` 开头；提交哈希仅接受十六进制；会话 id 与文本长度有上限
 - **Client**（`client.js`）：纯 JavaScript、无构建步骤，通过 `sidebar.panellist` + `main` 键控槽位注册面板；Darcula 配色（`#2B2D30` / `#3C3F41` / `#1B5A33` / `#6A2A24`…）；文案走 Harness locale 服务（zh / en）
 
@@ -79,7 +79,8 @@ dsh --profile <profile名> plugin install /path/to/dsh-git-control
 
 - 已在 **DeepSeek Harness 桌面版（0.2.1-rc.3）** 的 Web GUI 中实测：面板注册、自动跟随当前项目、三组变更树、diff、提交图与提交详情均正常
 - 只读性验证：`POST /api/git.ops` 返回 404，Host 无任何 git 写操作路由
-- 「向 AI 提建议」实测：评审消息经 `sessionController.prompt` 成功投递到当前会话（`{ok: true}`），agent 正常响应
+- `node --test test/*.test.mjs`：创建独立工作区会话、无文件或旧对话时发送、输入校验、拒绝投递后保留会话，以及客户端跳转。
+- 投递结果未知时保留新对话，请先检查其中的消息再重发。
 - 截图由真实面板渲染后截取（内容为演示数据）
 
 ## 🎁 图标与许可
