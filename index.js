@@ -1,12 +1,14 @@
 /**
- * Git Control — Host half (read-only).
+ * Git Control — Host half (read-only git + one chat bridge).
  *
  * Runs git in a registered Harness workspace and serves the results to the
  * browser panel through authenticated `/api/git.*` fetch routes (inside
- * Connection's browser-trust fence). Pure read-only: status, per-file diffs,
- * history, and one-commit details. No write operations are exposed at all.
- * No agent or session is involved: the workspace path is validated against
- * the workspace registry before any git command runs.
+ * Connection's browser-trust fence). Git is pure read-only: status, per-file
+ * diffs, history, and one-commit details. No git write operations are exposed
+ * at all. The single chat bridge route (`/api/git.review`) posts a review
+ * suggestion into the user's own active conversation through the same
+ * `sessionController.prompt` RPC the chat input itself uses — it never touches
+ * git and only ever targets the session the browser panel passes in.
  */
 
 /** Git selectors inherited from the environment are cleared so a command runs against `cwd` only. */
@@ -33,8 +35,10 @@ const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const QUERY_TIMEOUT_MS = 30_000;
 /** Cap the change rows shipped to the panel so a huge worktree stays responsive. */
 const MAX_CHANGES = 500;
+/** Cap the review-suggestion body sent to the conversation. */
+const MAX_REVIEW_TEXT = 8192;
 
-export const inject = ['connection', 'subprocess', 'workspaceRegistry', 'fs'];
+export const inject = ['connection', 'subprocess', 'workspaceRegistry', 'fs', 'sessionController'];
 
 /** One bounded git run: resolve the executable, spawn, collect, and enforce exit codes. */
 async function runGit(ctx, cwd, args, { allowed = [0], maxBytes = MAX_OUTPUT_BYTES, signal } = {}) {
@@ -372,7 +376,45 @@ async function handleCommit(ctx, request, signal) {
   });
 }
 
-/** Register the read-only git routes inside Connection's authentication fence, bound to this plugin's lifetime. */
+/** A session id taken from the browser panel; must be a plain identifier. */
+function requireSessionId(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw Object.assign(new Error('invalid session id'), { status: 400 });
+  }
+  return value;
+}
+
+/** The review-suggestion body; bounded so one message stays sane. */
+function requireReviewText(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_REVIEW_TEXT) {
+    throw Object.assign(new Error('invalid review text'), { status: 400 });
+  }
+  return value;
+}
+
+/**
+ * Bridge one review suggestion into the user's own conversation. This is the
+ * same `sessionController.prompt` RPC the chat input uses: `mode: 'queue'`
+ * admits the message (or queues it while the agent is running). Git is never
+ * touched; the target session is exactly the one the panel passes in.
+ */
+async function handleReview(ctx, request, signal) {
+  const payload = await request.json();
+  const cwd = typeof payload?.cwd === 'string' ? payload.cwd : '';
+  const sessionId = requireSessionId(payload?.sessionId ?? '');
+  const text = requireReviewText(payload?.text ?? '');
+  await requireWorkspacePath(ctx, cwd, signal);
+  const result = await ctx.sessionController.prompt({
+    requestId: crypto.randomUUID(),
+    sessionId,
+    mode: 'queue',
+    content: [{ type: 'text', text }],
+    clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  }, signal);
+  return json({ ok: result?.accepted === true });
+}
+
+/** Register the read-only git routes plus the chat bridge inside Connection's authentication fence. */
 function registerRoutes(ctx) {
   const lifetime = new AbortController();
   ctx.effect(() => () => lifetime.abort(), 'git-control: query lifetime');
@@ -391,18 +433,19 @@ function registerRoutes(ctx) {
       })
       .finally(() => clearTimeout(timer));
   };
-  const route = (path, handler) => {
+  const route = (path, methods, handler) => {
     ctx.connection.fetch.register({
       path,
-      methods: ['GET'],
+      methods,
       requestBody: 'buffered',
       fetch: (request) => run(ctx, request, handler),
     });
   };
-  route('/api/git.status', handleStatus);
-  route('/api/git.diff', handleDiff);
-  route('/api/git.log', handleLog);
-  route('/api/git.commit', handleCommit);
+  route('/api/git.status', ['GET'], handleStatus);
+  route('/api/git.diff', ['GET'], handleDiff);
+  route('/api/git.log', ['GET'], handleLog);
+  route('/api/git.commit', ['GET'], handleCommit);
+  route('/api/git.review', ['POST'], handleReview);
 }
 
 export function apply(ctx) {

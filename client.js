@@ -55,6 +55,13 @@ window.__ModuleLoader__.load({
       'group.changes': 'Changes',
       'group.unversioned': 'Unversioned Files',
       'filter.placeholder': 'Filter files',
+      'review.button': 'Suggest to AI',
+      'review.placeholder': 'Write your review suggestion for the AI…',
+      'review.send': 'Send',
+      'review.cancel': 'Cancel',
+      'review.sent': 'Sent to the conversation ✓',
+      'review.error': 'Failed to send: {message}',
+      'review.context': 'Git panel · {tag} · {path}',
       'diff.select': 'Select a file to view its changes.',
       'diff.staged': 'Staged changes',
       'diff.unstaged': 'Uncommitted changes',
@@ -89,6 +96,13 @@ window.__ModuleLoader__.load({
       'group.changes': 'Changes',
       'group.unversioned': 'Unversioned Files',
       'filter.placeholder': '过滤文件',
+      'review.button': '向 AI 提建议',
+      'review.placeholder': '写下你给 AI 的评审建议…',
+      'review.send': '发送',
+      'review.cancel': '取消',
+      'review.sent': '已发送到对话 ✓',
+      'review.error': '发送失败：{message}',
+      'review.context': 'Git 面板 · {tag} · {path}',
       'diff.select': '选择文件以查看其变更。',
       'diff.staged': '暂存区变更',
       'diff.unstaged': '未提交变更',
@@ -191,6 +205,17 @@ window.__ModuleLoader__.load({
 .jb-dline-ctx .jb-dline-text{color:${C.code}}
 .jb-dline-meta .jb-dline-text{color:${C.textDim}}
 .jb-diffempty{flex:1;display:flex;align-items:center;justify-content:center;color:${C.textDim};font-size:13px;background:${C.panel}}
+.jb-reviewbar{flex:none;display:flex;flex-direction:column;gap:8px;padding:8px 14px;background:${C.toolbar};border-bottom:1px solid ${C.border}}
+.jb-review-input{box-sizing:border-box;width:100%;min-height:64px;max-height:150px;color:${C.text};background:${C.panel};border:1px solid ${C.border};border-radius:4px;font:inherit;font-size:12.5px;line-height:19px;resize:vertical;padding:6px 8px;outline:none}
+.jb-review-input:focus{border-color:${C.accent}}
+.jb-review-row{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+.jb-review-sent{color:${C.added};font-size:12px}
+.jb-review-err{color:#E8A7A3;font-size:12px;margin-right:auto}
+.jb-review-btn{box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;height:24px;padding:0 12px;border:none;border-radius:4px;background:${C.accent};color:#FFFFFF;font:inherit;font-size:12px;font-weight:500;cursor:pointer}
+.jb-review-btn:hover:not(:disabled){background:#5472B8}
+.jb-review-btn:disabled{opacity:.5;cursor:default}
+.jb-review-btn-ghost{background:${C.gutter};color:${C.text};border:1px solid ${C.border}}
+.jb-review-btn-ghost:hover:not(:disabled){background:${C.hover}}
 .jb-notice{flex:none;display:flex;align-items:center;gap:6px;padding:6px 14px;font-size:12px;background:${C.toolbar};border-bottom:1px solid ${C.border};color:${C.text}}
 .jb-notice-error{color:#E8A7A3}
 .jb-empty{color:${C.textDim};padding:16px;font-size:13px;background:${C.panel}}
@@ -310,7 +335,13 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
     }
 
     async function api(path, options = {}) {
-      const response = await fetch(path, { method: options.method ?? 'GET', signal: options.signal });
+      const body = options.body === undefined ? undefined : JSON.stringify(options.body);
+      const response = await fetch(path, {
+        method: options.method ?? 'GET',
+        signal: options.signal,
+        headers: body === undefined ? undefined : { 'content-type': 'application/json' },
+        body,
+      });
       let data = null;
       try { data = await response.json(); } catch { /* non-JSON */ }
       if (!response.ok) throw new Error(data && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
@@ -454,7 +485,31 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
           h('span', { className: 'jb-dline-text' }, line.text === '' ? '\u00a0' : line.text))));
     }
 
-    function DiffView({ path, tag, stats, diff, t }) {
+    /** Inline "suggest to the AI" composer: textarea, send/cancel, sent/error states. */
+    function ReviewComposer({ t, sending, sent, error, onSubmit, onClose }) {
+      const [value, setValue] = useState('');
+      const prevSent = useRef(false);
+      useEffect(() => {
+        if (sent && !prevSent.current) setValue('');
+        prevSent.current = sent;
+      }, [sent]);
+      const submit = () => { if (value.trim() !== '' && !sending) onSubmit(value.trim()); };
+      return h('div', { className: 'jb-reviewbar' },
+        h('textarea', {
+          className: 'jb-review-input', value, placeholder: t('review.placeholder'),
+          onChange: (event) => setValue(event.target.value),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit(); }
+          },
+        }),
+        h('div', { className: 'jb-review-row' },
+          error !== null ? h('span', { className: 'jb-review-err' }, t('review.error', { message: error })) : null,
+          sent ? h('span', { className: 'jb-review-sent' }, t('review.sent')) : null,
+          h('button', { type: 'button', className: 'jb-review-btn jb-review-btn-ghost', onClick: onClose, disabled: sending }, t('review.cancel')),
+          h('button', { type: 'button', className: 'jb-review-btn', onClick: submit, disabled: sending || value.trim() === '' }, t('review.send'))));
+    }
+
+    function DiffView({ path, tag, stats, diff, t, review, onReview, onReviewSend, onReviewClose }) {
       if (diff === null) return h('div', { className: 'jb-diffempty' }, t('diff.select'));
       if (diff.binary) return h('div', { className: 'jb-diffempty' }, t('diff.binary'));
       const lines = diff.text === undefined ? [] : parseDiff(diff.text, diff.untracked === true);
@@ -463,7 +518,10 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
         h('div', { className: 'jb-diffhead' },
           h('span', { className: 'jb-diffpath', title: path }, path),
           h('span', { className: 'jb-difftag' }, tag),
-          stats !== null ? h('span', { className: 'jb-diffstats' }, `+${stats.ins} −${stats.del}`) : null),
+          stats !== null ? h('span', { className: 'jb-diffstats' }, `+${stats.ins} −${stats.del}`) : null,
+          h('span', { className: 'jb-spacer' }),
+          h('button', { type: 'button', className: 'jb-review-btn', onClick: onReview }, t('review.button'))),
+        review.open ? h(ReviewComposer, { t, sending: review.sending, sent: review.sent, error: review.error, onSubmit: onReviewSend, onClose: onReviewClose }) : null,
         h(DiffLines, { lines }));
     }
 
@@ -496,7 +554,7 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
         rows);
     }
 
-    function CommitDetail({ detail, t }) {
+    function CommitDetail({ detail, t, review, onReview, onReviewSend, onReviewClose }) {
       if (detail === null) return null;
       if (detail.found === false) {
         return h('div', { className: 'jb-logdetail' },
@@ -507,7 +565,10 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
       return h('div', { className: 'jb-logdetail' },
         h('div', { className: 'jb-logdetail-head' },
           h('span', { className: 'jb-logdetail-subject', title: detail.subject }, detail.subject),
-          h('span', { className: 'jb-loghash', title: detail.hash }, detail.short)),
+          h('span', { className: 'jb-loghash', title: detail.hash }, detail.short),
+          h('span', { className: 'jb-spacer' }),
+          h('button', { type: 'button', className: 'jb-review-btn', onClick: onReview }, t('review.button'))),
+        review.open ? h(ReviewComposer, { t, sending: review.sending, sent: review.sent, error: review.error, onSubmit: onReviewSend, onClose: onReviewClose }) : null,
         h('div', { className: 'jb-logdetail-meta' },
           `${detail.author}${detail.email ? ` <${detail.email}>` : ''} · ${fmtDateTime(detail.date)}${detail.parents.length > 1 ? ` · ${t('log.parents', { n: String(detail.parents.length) })}` : ''}`),
         detail.files.length > 0
@@ -557,6 +618,11 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
       const [logSelected, setLogSelected] = useState(null);
       const [detail, setDetail] = useState(null);
       const [detailLoading, setDetailLoading] = useState(false);
+      const [reviewOpen, setReviewOpen] = useState(false);
+      const [reviewTarget, setReviewTarget] = useState(null);
+      const [reviewSending, setReviewSending] = useState(false);
+      const [reviewSent, setReviewSent] = useState(false);
+      const [reviewError, setReviewError] = useState(null);
       const [collapsed, setCollapsed] = useState(() => new Set());
       const abortRef = useRef(null);
 
@@ -613,6 +679,8 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
         setSelected(entry);
         setDiff(null);
         setDiffLoading(true);
+        setReviewOpen(false);
+        setReviewError(null);
         try {
           const params = new URLSearchParams({ cwd });
           params.set('path', entry.path);
@@ -633,6 +701,8 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
         setLogSelected(hash);
         setDetail(null);
         setDetailLoading(true);
+        setReviewOpen(false);
+        setReviewError(null);
         try {
           const data = await api(`/api/git.commit?cwd=${encodeURIComponent(cwd)}&hash=${encodeURIComponent(hash)}`);
           setDetail(data);
@@ -642,6 +712,47 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
           setDetailLoading(false);
         }
       }, [cwd]);
+
+      const openReview = useCallback((target) => {
+        setReviewTarget(target);
+        setReviewSent(false);
+        setReviewError(null);
+        setReviewOpen(true);
+      }, []);
+
+      const closeReview = useCallback(() => {
+        setReviewOpen(false);
+        setReviewError(null);
+      }, []);
+
+      /** Compose the review message: the suggestion + a bounded context block (diff). */
+      const sendReview = useCallback(async (text) => {
+        if (cwd === null || currentSession === null || reviewTarget === null) return;
+        setReviewSending(true);
+        setReviewError(null);
+        try {
+          const target = reviewTarget;
+          const snippet = (target.kind === 'commit' ? detail?.diff : diff?.text) ?? '';
+          const lines = snippet.split('\n').slice(0, 200).join('\n');
+          const tag = target.kind === 'commit'
+            ? t('log.detail')
+            : t(target.entry.untracked ? 'diff.untracked' : target.entry.staged && target.entry.unstagedToo ? 'diff.both' : target.entry.staged ? 'diff.staged' : 'diff.unstaged');
+          const label = target.kind === 'commit' ? `${target.detail.subject} (${target.detail.short})` : target.entry.displayPath;
+          let message = text;
+          message += '\n\n---\n' + t('review.context', { tag, path: label });
+          if (lines !== '') message += '\n\n```diff\n' + lines + '\n```';
+          const data = await api('/api/git.review', {
+            method: 'POST',
+            body: { cwd, sessionId: currentSession.id, text: message },
+          });
+          if (data.ok === true) setReviewSent(true);
+          else setReviewError('unexpected response');
+        } catch (error) {
+          setReviewError(error.message);
+        } finally {
+          setReviewSending(false);
+        }
+      }, [cwd, currentSession, reviewTarget, detail, diff, t]);
 
       const query = filter.trim().toLowerCase();
       const filtered = (status?.changes ?? []).filter((entry) =>
@@ -715,6 +826,10 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
                   path: selectedEntry?.displayPath ?? '', tag: diffTag,
                   stats: selectedEntry && !selectedEntry.untracked ? { ins: selectedEntry.ins, del: selectedEntry.del } : null,
                   diff, t,
+                  review: { open: reviewOpen && reviewTarget?.kind === 'diff', sending: reviewSending, sent: reviewSent, error: reviewError },
+                  onReview: () => openReview({ kind: 'diff', entry: selectedEntry }),
+                  onReviewSend: sendReview,
+                  onReviewClose: closeReview,
                 })));
       } else {
         const graph = log === null ? null : buildGraph(log);
@@ -744,7 +859,13 @@ const FILE_ICONS = {typescript:[['path',{fill:"#007acc",d:"M23.827 8.243a4.4 4.4
               })),
           detailLoading
             ? h('div', { className: 'jb-logdetail' }, h('div', { className: 'jb-empty' }, t('loading')))
-            : h(CommitDetail, { detail, t }));
+            : h(CommitDetail, {
+              detail, t,
+              review: { open: reviewOpen && reviewTarget?.kind === 'commit', sending: reviewSending, sent: reviewSent, error: reviewError },
+              onReview: () => openReview({ kind: 'commit', detail }),
+              onReviewSend: sendReview,
+              onReviewClose: closeReview,
+            }));
       }
 
       return h('div', { className: 'jb-root' },

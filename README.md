@@ -12,8 +12,8 @@
 
 ## 为什么是「纯只读」？
 
-- 没有暂存、没有提交、没有回滚、没有切换分支——**面板上没有任何写操作**
-- Host 端只暴露 **4 条只读 GET 路由**（status / diff / log / commit），没有写操作 API，想写也写不了
+- 没有暂存、没有提交、没有回滚、没有切换分支——**面板上没有任何 git 写操作**
+- Host 端只暴露 **4 条只读 GET 路由**（status / diff / log / commit）+ 1 条「发送到对话」桥接路由（review，仅投递消息，不碰 git），想写 git 也写不了
 - 需要动手时用 git 命令行或 IDE 自己来；面板只负责把仓库状态**讲清楚**
 
 ## ✨ 特性
@@ -28,12 +28,17 @@
 | 🌿 **提交图 + 提交详情** | 多色泳道、贝塞尔平滑合并线、分支标签；点开任意提交：作者 / 时间 / 父提交 / 文件列表 / 完整 diff |
 | 🐘 **大仓库友好** | 变更列表自动截断（前 500 条并提示总数）+ 文件过滤框 |
 | 🌐 **中英双语** | 界面文案跟随 Harness 语言（中文 / English） |
+| 💬 **一键向 AI 提建议** | review 时不用切窗口：在 diff 或提交详情里直接写评审建议，一键投递到当前对话，agent 即刻响应 |
 
 ## 📸 截图
 
 **Changes 视图**——目录分组的变更树（按文件类型显示图标、行数统计），右侧为带行号的统一 diff：
 
 ![Changes](screenshots/changes.png)
+
+**向 AI 提建议**——review 时在面板内直接写建议，一键发送到当前对话（无需切换窗口；附带上当前 diff 作为上下文）：
+
+![Review](screenshots/review.png)
 
 **Log 视图**——多色提交图与分支标签；点击任意提交，底部展开详情面板（作者、时间、变更文件列表与完整 diff）：
 
@@ -57,21 +62,24 @@ dsh --profile <profile名> plugin install /path/to/dsh-git-control
 2. 面板**自动绑定当前项目**；点击工具栏仓库下拉可切换查看其他已注册工作区
 3. **Changes 标签**：顶部输入框可按路径过滤；点击任意文件即可在右侧查看 diff
 4. **Log 标签**：点击任意提交行，底部展开该提交的详情（文件列表 + 完整 diff）
+5. **向 AI 提建议**：在 diff 或提交详情的右上角点击「向 AI 提建议」，写下评审意见并发送——消息会带着当前 diff 上下文投递到**正在使用的对话**，agent 立即开始处理，无需离开面板（发送走的是与聊天输入框完全相同的 `sessionController.prompt` 通道，`mode: 'queue'` 会在 agent 忙碌时排队）
 
 ## 🏗 架构
 
-- **Host**（`index.js`）：通过 `ctx.subprocess` 运行 git（清除继承的 `GIT_*` 环境变量、`GIT_TERMINAL_PROMPT=0`），在 Harness Connection 认证栅栏内注册 4 条**只读 GET 路由**：
+- **Host**（`index.js`）：通过 `ctx.subprocess` 运行 git（清除继承的 `GIT_*` 环境变量、`GIT_TERMINAL_PROMPT=0`），在 Harness Connection 认证栅栏内注册 4 条**只读 GET 路由** + 1 条**对话桥接 POST 路由**：
   - `/api/git.status` — 仓库状态 + 每文件 numstat 行数统计
   - `/api/git.diff` — 单文件 diff（暂存 / 工作区 / 合并 / 未跟踪）
   - `/api/git.log` — 提交历史（含 parents，供提交图使用）
   - `/api/git.commit` — 单提交元数据 + 文件统计 + 完整 diff
-  - 安全约束：`cwd` 只能是已注册 workspace 的路径；文件路径拒绝绝对路径 / `..` / `-` 开头；提交哈希仅接受十六进制
+  - `/api/git.review` — 把评审建议投递到当前会话（调用与聊天输入框相同的 `ctx.sessionController.prompt`，`mode: 'queue'`；不触碰 git）
+  - 安全约束：`cwd` 只能是已注册 workspace 的路径；文件路径拒绝绝对路径 / `..` / `-` 开头；提交哈希仅接受十六进制；会话 id 与文本长度有上限
 - **Client**（`client.js`）：纯 JavaScript、无构建步骤，通过 `sidebar.panellist` + `main` 键控槽位注册面板；Darcula 配色（`#2B2D30` / `#3C3F41` / `#1B5A33` / `#6A2A24`…）；文案走 Harness locale 服务（zh / en）
 
 ## ✅ 验证情况
 
 - 已在 **DeepSeek Harness 桌面版（0.2.1-rc.3）** 的 Web GUI 中实测：面板注册、自动跟随当前项目、三组变更树、diff、提交图与提交详情均正常
-- 只读性验证：`POST /api/git.ops` 返回 404，Host 无任何写操作路由
+- 只读性验证：`POST /api/git.ops` 返回 404，Host 无任何 git 写操作路由
+- 「向 AI 提建议」实测：评审消息经 `sessionController.prompt` 成功投递到当前会话（`{ok: true}`），agent 正常响应
 - 截图由真实面板渲染后截取（内容为演示数据）
 
 ## 🎁 图标与许可
