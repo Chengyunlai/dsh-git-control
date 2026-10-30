@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Git Control",
+    "description": "Read-only JetBrains-style Git panel for the Harness workspace: repository status, file diffs, commit history, and per-commit details."
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Git 控制台",
+    "description": "为 Harness 工作区提供纯只读的类 JetBrains Git 面板：仓库状态、文件差异、提交历史与单提交详情。"
+  }
+}
